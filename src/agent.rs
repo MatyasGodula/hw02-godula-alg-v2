@@ -3,6 +3,13 @@ pub mod Agent {
     use strum::IntoEnumIterator;
     use strum_macros::EnumIter;
 
+    /*
+    I agree that this code might seem like a bit of a show off stunt to show that I can solve it much faster than the reference
+    but in reality i was really worried that the program would be too slow so I performed an incredibly aggressive set of optimizations
+    specifically the use of bitmaps 
+    */
+
+
     #[derive(EnumIter, Debug)]
     enum Directions {
         North,
@@ -21,19 +28,19 @@ pub mod Agent {
     }
 
     pub struct Agent {
-        probes: Vec<i32>,
-        probes_max_vis: Vec<i32>,
-        board: Vec<Vec<i32>>,
+        probes: Vec<i32>, // stores the read probes
+        probes_max_vis: Vec<i32>, // the most covered mountain peaks, used for pruning for each probe
+        board: Vec<Vec<i32>>, // stores the board with the read altitudes
         probe_visions: Vec<Vec<u64>>, // stores the visibilities for each position for every probe 
-        board_width: i32,
-        board_height: i32,
+        board_width: i32, // dimensions
+        board_height: i32, // dimensions
     }
 
     struct State {
-        occupied_positions: u64,
-        visited_positions: u64,
-        remaining_probes: u8,
-        next_index: usize
+        occupied_positions: u64, // maps the places where probes are placed
+        visited_positions: u64, // bitmap storing positions that are monitored by any one of the placed probes
+        remaining_probes: u8, // keeps remaining probes in binary ie. 0 0 0 0 1 1 1 1 means that there are 4 probes on indexes 0, 1, 2, 3
+        next_index: usize // used in the dfs to pass the next index of a probe to be explored
     }
 
     impl Agent {
@@ -43,7 +50,7 @@ pub mod Agent {
             new_read
         }
 
-        fn read_input() -> Self {
+        fn read_input() -> Self { // self explanatory
             use DataEnumeration::{Height, Width};
 
             let mut dimensions = String::new();
@@ -94,24 +101,24 @@ pub mod Agent {
         }
 
         // sorts the probes in descending order and 
-        fn analyze_probes(&mut self) {
-            self.probes.sort_by_key(|&x| -x);
+        fn analyze_probes(&mut self) { // precomputes data that will be used for getting important info fast e.g. getting the visibility for a specific position
+            self.probes.sort_by_key(|&x| -x); // sorts the array in a descending order creating a heuristic where the probes with the largest visibility will be placed first
             for probe_visibility_index in 0..self.probes.len() {
-                let probe_visibility = &self.probes[probe_visibility_index];
+                let probe_visibility = &self.probes[probe_visibility_index]; // fetches the visibility for the current probe
                 let mut probe_visions_new: Vec<u64> = Vec::new();
-                let mut best_visibility = 0;
+                let mut best_visibility = 0; // initializes the visibility as 0 
                 for y_coord in 0..self.board_height {
                     for x_coord in 0..self.board_width {
-                        let mut current_visited = 0;
-                        let new_best_visibility = self.calculate_vision_score(&x_coord, &y_coord, &mut current_visited, *probe_visibility);
-                        let new_best = current_visited.count_ones() as i32;
-                        probe_visions_new.push(current_visited);
+                        let mut current_visited = 0; // initializes an empty bit map for storing visited positions
+                        let _ = self.calculate_vision_score(&x_coord, &y_coord, &mut current_visited, *probe_visibility); // the return value is mostly a remnant of some previous tries, could be further optimized
+                        let new_best = current_visited.count_ones() as i32; // counts the bits flipped to 1 which means visible from this position
+                        probe_visions_new.push(current_visited); // this stores the vision maps for every position which i can afford since i am working with just 64 bits for each
                         if new_best > best_visibility {
                             best_visibility = new_best;
                         }
                     }
                 }
-                self.probe_visions.push(probe_visions_new);
+                self.probe_visions.push(probe_visions_new); // these will be useful later
                 self.probes_max_vis.push(best_visibility);
             }
         }
@@ -121,6 +128,7 @@ pub mod Agent {
         which is important for performance-critical tasks.
         */
 
+        /// if all remaining nodes visibilities added will be less than the best possible solution discovered so far then prune
         pub fn can_prune(&self, remaining_probes: u8, best_visited_peaks: i32, current_visited_peaks: i32) -> bool {
             let mut potential_visited_peaks = current_visited_peaks;
             for index_probe in 0..self.probes.len() {
@@ -128,40 +136,35 @@ pub mod Agent {
                     potential_visited_peaks += self.probes_max_vis[index_probe];
                 }
             }
-            //println!("{} < {}", potential_visited_peaks, best_visited_peaks);
             potential_visited_peaks < best_visited_peaks
         }
 
-        pub fn coord_to_index(&self, x: i32, y: i32) -> usize {
+        fn coord_to_index(&self, x: i32, y: i32) -> usize {
             (y * self.board_width + x) as usize // Cast to usize for bitmap indexing
         }
 
-        /// returns a (x, y) tuple
-        pub fn index_to_coord(&self, index: usize) -> (i32, i32) {
+        /// returns a (x, y) tuple inverse of the previous function
+        fn index_to_coord(&self, index: usize) -> (i32, i32) {
             let x: usize = index % self.board_width as usize;
             let y: usize = index / self.board_width as usize;
             (x as i32, y as i32)
         }
 
-        pub fn is_occupied(&self, x: i32, y: i32, occupied: &u64) -> bool {
+        fn is_occupied(&self, x: i32, y: i32, occupied: &u64) -> bool {
             let index = self.coord_to_index(x, y);
             (occupied & (1 << index)) != 0 // Returns true if the bit at index is set
         }
 
-        pub fn mark_occupied(&self, x: i32, y: i32, occupied: &mut u64) {
+        fn mark_occupied(&self, x: i32, y: i32, occupied: &mut u64) {
             let index = self.coord_to_index(x, y);
             *occupied |= 1 << index; // Marks the bit at an index
         }
 
-        pub fn coord_is_viable(&self, x: i32, y: i32) -> bool {
+        fn coord_is_viable(&self, x: i32, y: i32) -> bool {
             x >= 0 && y >= 0 && x < self.board_width && y < self.board_height
         }
 
-        pub fn read_number_of_occupied(&self, occupied: &u64) -> i32 {
-            occupied.count_ones() as i32 // Can cast safely because the bitmap is just going to be a u64 meaning 64 bits
-        }
-
-        pub fn translate_probes_to_u8(&self) -> u8 {
+        fn translate_probes_to_u8(&self) -> u8 {
             let mut probe_storage: u8 = 0;
             for index in 0..self.probes.len() {
                 probe_storage |= 1 << index;
@@ -174,23 +177,15 @@ pub mod Agent {
             */
         }
 
-        pub fn remove_probe(&self, bitmap: &mut u8, index: usize) {
+        fn remove_probe(&self, bitmap: &mut u8, index: usize) { // abstracts bit logic for a more readable code
             *bitmap &= !(1 << index);
         }
 
-        pub fn print_data(&self) {
-            println!("width: {}, height: {}", self.board_width, self.board_height);
-            for line in &self.board {
-                println!("{:?}", line);
-            }
-            println!("{:?}", self.probes);
-        }
-
-        pub fn get_visible_peaks(&self, probe_index: usize, x: i32, y :i32) -> u64 {
+        fn get_visible_peaks(&self, probe_index: usize, x: i32, y :i32) -> u64 { // returns the bitmap of vision for the current probe at a specific location
             self.probe_visions[probe_index][self.coord_to_index(x, y)]
         }
 
-        pub fn get_visited_altitudes(&self, visited: u64) -> i32 {
+        fn get_visited_altitudes(&self, visited: u64) -> i32 { // goes through all flipped bits and sums the altitudes at these positions
             let mut sum: i32 = 0;
             for index in 0..64 { // i know i am dealing with a 64 bit number
                 if (visited & (1 << index)) != 0 {
@@ -205,7 +200,7 @@ pub mod Agent {
         /// visited is a bitmap of already visited states, if used at the start set to 0
         /// visibility is the vision reach of each probe
         /// returns the vision score for a specific probe at a specific position
-        pub fn calculate_vision_score(&self, x: &i32, y: &i32, visited: &mut u64, visibility: i32) -> i32 {
+        fn calculate_vision_score(&self, x: &i32, y: &i32, visited: &mut u64, visibility: i32) -> i32 {
             let probe_altitude = self.board[*y as usize][*x as usize];
             let mut sum = 0;
             // add check for occupied probe location
@@ -242,7 +237,7 @@ pub mod Agent {
                         continue; // skip to the end of the current loop
                     } 
                     max_slope = slope;
-                    if !self.is_occupied(new_x, new_y, visited) {
+                    if !self.is_occupied(new_x, new_y, visited) { // flips the bit at the current index to show that it can be seen by the probe
                         sum += value_at_pos;
                         self.mark_occupied(new_x, new_y, visited);
                     }  
@@ -259,7 +254,7 @@ pub mod Agent {
             let initial_state = State {
                 occupied_positions: 0,
                 visited_positions: 0,
-                remaining_probes: self.translate_probes_to_u8(),
+                remaining_probes: self.translate_probes_to_u8(), 
                 next_index: 0
             };
 
@@ -269,9 +264,11 @@ pub mod Agent {
 
             while let Some(popped_state) = stack.pop() {
                 if popped_state.remaining_probes.count_ones() == 0 { // reached the end of the dfs
-                    let popped_visited_peaks = popped_state.visited_positions.count_ones() as i32;
+                    // extracts data from the popped probe for more readability
+                    let popped_visited_peaks = popped_state.visited_positions.count_ones() as i32; 
                     let popped_visited_altitudes = self.get_visited_altitudes(popped_state.visited_positions);
                     let popped_placed_probes_altitudes = self.get_visited_altitudes(popped_state.occupied_positions);
+                    // checks for the logic for evaluating best positions
                     if popped_visited_peaks > visited_peaks_best {
                         visited_peaks_best = popped_visited_peaks as i32;
                         visited_altitudes_best = popped_visited_altitudes;
@@ -287,8 +284,8 @@ pub mod Agent {
                     }
                     continue;
                 } 
-                let probe_index = popped_state.next_index;
-                if popped_state.remaining_probes & (1 << probe_index) == 0 {
+                let probe_index = popped_state.next_index; // reads the current index from the popped state, it is a remnant of the code that used to be here, i just did not want to refactor it all rust will optimize it away
+                if popped_state.remaining_probes & (1 << probe_index) == 0 { // checks if this probe has already been used (probably redundant now)
                     continue; // go to the next probe if this probe has been used
                 }
                 for y_coord in 0..self.board_height { // go through all the coordinates
@@ -296,11 +293,18 @@ pub mod Agent {
                         if self.is_occupied(x_coord, y_coord, &popped_state.occupied_positions) {
                             continue; // if the current position is already occupied go to the next
                         }
-                        //let current_probe_visibility = self.probes[probe_index];
                         let mut new_occupied = popped_state.occupied_positions;
                         let mut new_visited = popped_state.visited_positions;
                         let mut new_remaining_probes = popped_state.remaining_probes;
                         self.mark_occupied(x_coord, y_coord, &mut new_occupied); // mark the current position as occupied
+                        /*
+                        This code below is extremely interesting, its an incredibly fast way of combining the visibility and the already visited nodes
+                        for example lets say I had two shorter bitmaps
+                        visited: 0 0 1 1 0 1 1 0
+                        visible_peaks: 1 1 1 0 0 0 0 0 lets say the probe was placed at index 1 and sees 1 to each side
+                        the |= operator will combine these two making
+                        visited: 1 1 1 1 0 1 1 0 meaning that the already flipped bits will stay flipped and the 0 ones will flip to 1 
+                        */
                         new_visited |= self.get_visible_peaks(probe_index, x_coord, y_coord); // update the new visited position
                         self.remove_probe(&mut new_remaining_probes, probe_index); // remove the current remaining probe
                         if self.can_prune(new_remaining_probes, visited_peaks_best, new_visited.count_ones() as i32) {
