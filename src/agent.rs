@@ -33,7 +33,7 @@ pub mod Agent {
         occupied_positions: u64,
         visited_positions: u64,
         remaining_probes: u8,
-        starting_position: usize
+        next_index: usize
     }
 
     impl Agent {
@@ -260,7 +260,7 @@ pub mod Agent {
                 occupied_positions: 0,
                 visited_positions: 0,
                 remaining_probes: self.translate_probes_to_u8(),
-                starting_position: 0
+                next_index: 0
             };
 
             let mut stack = Vec::new();
@@ -287,36 +287,35 @@ pub mod Agent {
                     }
                     continue;
                 } 
-                for probe_index in popped_state.starting_position..self.probes.len() {
-                    
-                    if popped_state.remaining_probes & (1 << probe_index) == 0 {
-                        continue; // go to the next probe if this probe has been used
-                    }
-                    for y_coord in 0..self.board_height { // go through all the coordinates
-                        for x_coord in 0..self.board_width {
-                            if self.is_occupied(x_coord, y_coord, &popped_state.occupied_positions) {
-                                continue; // if the current position is already occupied go to the next
-                            }
-                            //let current_probe_visibility = self.probes[probe_index];
-                            let mut new_occupied = popped_state.occupied_positions;
-                            let mut new_visited = popped_state.visited_positions;
-                            let mut new_remaining_probes = popped_state.remaining_probes;
-                            self.mark_occupied(x_coord, y_coord, &mut new_occupied); // mark the current position as occupied
-                            new_visited |= self.get_visible_peaks(probe_index, x_coord, y_coord); // update the new visited position
-                            self.remove_probe(&mut new_remaining_probes, probe_index); // remove the current remaining probe
-                            if self.can_prune(new_remaining_probes, visited_peaks_best, new_visited.count_ones() as i32) {
-                                continue;
-                            }
-
-                            stack.push(State {
-                                occupied_positions: new_occupied,
-                                visited_positions: new_visited,
-                                remaining_probes: new_remaining_probes,
-                                starting_position: popped_state.starting_position + 1
-                            }); // push the next state to the stack
+                let probe_index = popped_state.next_index;
+                if popped_state.remaining_probes & (1 << probe_index) == 0 {
+                    continue; // go to the next probe if this probe has been used
+                }
+                for y_coord in 0..self.board_height { // go through all the coordinates
+                    for x_coord in 0..self.board_width {
+                        if self.is_occupied(x_coord, y_coord, &popped_state.occupied_positions) {
+                            continue; // if the current position is already occupied go to the next
                         }
+                        //let current_probe_visibility = self.probes[probe_index];
+                        let mut new_occupied = popped_state.occupied_positions;
+                        let mut new_visited = popped_state.visited_positions;
+                        let mut new_remaining_probes = popped_state.remaining_probes;
+                        self.mark_occupied(x_coord, y_coord, &mut new_occupied); // mark the current position as occupied
+                        new_visited |= self.get_visible_peaks(probe_index, x_coord, y_coord); // update the new visited position
+                        self.remove_probe(&mut new_remaining_probes, probe_index); // remove the current remaining probe
+                        if self.can_prune(new_remaining_probes, visited_peaks_best, new_visited.count_ones() as i32) {
+                            continue;
+                        }
+
+                        stack.push(State {
+                            occupied_positions: new_occupied,
+                            visited_positions: new_visited,
+                            remaining_probes: new_remaining_probes,
+                            next_index: popped_state.next_index + 1
+                        }); // push the next state to the stack
                     }
                 }
+                
             }
             println!("{} {} {}", visited_peaks_best, visited_altitudes_best, placed_probes_altitudes_best);
 
